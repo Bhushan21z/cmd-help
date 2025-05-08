@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# cmdh - Terminal Command Helper
+# A utility that helps users remember useful terminal commands using Gemini AI
+
+# Check if GEMINI_API_KEY is set
+if [ -z "$GEMINI_API_KEY" ]; then
+  # Check if it's in the config file
+  CONFIG_FILE="$HOME/.cmdh_config"
+  if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+  fi
+  
+  # If still not set, prompt the user
+  if [ -z "$GEMINI_API_KEY" ]; then
+    echo "Please enter your Gemini API key:"
+    read -r GEMINI_API_KEY
+    echo "GEMINI_API_KEY=$GEMINI_API_KEY" > "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+  fi
+fi
+
+# Function to display help
+show_help() {
+  echo "Usage: cmdh [OPTIONS] QUERY"
+  echo
+  echo "Options:"
+  echo "  -h, --help     Show this help message"
+  echo "  -p, --prompt   Use the provided prompt/query"
+  echo "  -v, --verbose  Show detailed response including explanations"
+  echo "  -c, --copy     Copy the command to clipboard"
+  echo "  -s, --setup    Configure API key and settings"
+  echo
+  echo "Examples:"
+  echo "  cmdh -p \"redis commands\""
+  echo "  cmdh -p \"how to find large files\""
+  echo "  cmdh -v -p \"set up a python virtual environment\""
+}
+
+# Function to make the API call
+fetch_commands() {
+  query="$1"
+  verbose="$2"
+  
+  # Define system prompt based on verbose mode
+  if [ "$verbose" = true ]; then
+    system_prompt="You are a helpful terminal command assistant. Provide useful terminal commands related to the user's query. For each command, include a brief explanation of what it does, any important options, and examples of usage. Format your response with clear headings and bullet points for readability."
+  else
+    system_prompt="You are a helpful terminal command assistant. Provide ONLY the most useful terminal commands related to the user's query. Format your response as a simple list with minimal explanation. Each command should be on a new line and ready to copy-paste. Don't include any explanations unless absolutely necessary for usage."
+  fi
+  
+  # Make API call to Gemini
+  response=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
+    -H 'Content-Type: application/json' \
+    -X POST \
+    -d '{
+      "contents": [
+        {
+          "parts": [
+            {
+              "text": "'"$system_prompt"'"
+            }
+          ],
+          "role": "model"
+        },
+        {
+          "parts": [
+            {
+              "text": "'"$query"'"
+            }
+          ],
+          "role": "user"
+        }
+      ]
+    }')
+  
+  # Extract and display the response text
+  command_text=$(echo "$response" | grep -o '"text": "[^"]*' | sed 's/"text": "//')
+  
+  if [ -z "$command_text" ]; then
+    echo "Error getting response from Gemini API. Check your API key and network connection."
+    echo "Full response: $response"
+    exit 1
+  fi
+  
+  # Display the response
+  echo -e "$command_text" | sed 's/\\n/\n/g'
+}
+
+# Function to set up configuration
+setup_config() {
+  echo "Setting up cmdh configuration..."
+  echo "Please enter your Gemini API key:"
+  read -r GEMINI_API_KEY
+  echo "GEMINI_API_KEY=$GEMINI_API_KEY" > "$HOME/.cmdh_config"
+  chmod 600 "$HOME/.cmdh_config"
+  echo "Configuration saved to $HOME/.cmdh_config"
+}
+
+# Process command line arguments
+VERBOSE=false
+COPY=false
+PROMPT=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    -p|--prompt)
+      shift
+      PROMPT="$1"
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      ;;
+    -c|--copy)
+      COPY=true
+      ;;
+    -s|--setup)
+      setup_config
+      exit 0
+      ;;
+    *)
+      if [ -z "$PROMPT" ]; then
+        PROMPT="$1"
+      fi
+      ;;
+  esac
+  shift
+done
+
+# Check if a prompt was provided
+if [ -z "$PROMPT" ]; then
+  echo "Error: No prompt provided."
+  show_help
+  exit 1
+fi
+
+# Fetch and display commands
+RESULT=$(fetch_commands "$PROMPT" "$VERBOSE")
+echo "$RESULT"
+
+# Copy to clipboard if requested
+if [ "$COPY" = true ]; then
+  if command -v xclip &> /dev/null; then
+    echo "$RESULT" | xclip -selection clipboard
+    echo "Command copied to clipboard."
+  elif command -v pbcopy &> /dev/null; then
+    echo "$RESULT" | pbcopy
+    echo "Command copied to clipboard."
+  else
+    echo "Could not copy to clipboard: xclip or pbcopy not found."
+  fi
+fi
